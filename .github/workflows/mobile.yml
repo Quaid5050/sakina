@@ -61,6 +61,10 @@ jobs:
         if: steps.guard.outputs.present == 'true' && hashFiles('apps/mobile/build.yaml') != ''
         run: dart run build_runner build --delete-conflicting-outputs
 
+      - name: ARB keys match across en/ur/ar
+        if: steps.guard.outputs.present == 'true'
+        run: python3 tool/check_arb_keys.py lib/l10n
+
       - name: Localisations
         if: steps.guard.outputs.present == 'true'
         run: flutter gen-l10n
