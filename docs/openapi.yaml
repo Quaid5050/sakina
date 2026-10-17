@@ -1,0 +1,3037 @@
+openapi: 3.1.0
+info:
+  title: Sakina API
+  version: 1.0.0
+  summary: Privacy-first Muslim companion. Opt-in sync, families, masjids, billing.
+  description: |
+    The contract between the Sakina mobile app, the masjid console and the backend.
+    **This file is the source of truth** (ADR-0011). The backend's generated Swagger document
+    must match it, and contract tests enforce that.
+
+    Privacy rules visible in the contract:
+    - No endpoint accepts latitude/longitude from a user. Masjid search takes geohash cells of exactly 4 characters.
+    - No endpoint computes prayer times, Qibla or Hijri dates. Those are computed on the device.
+    - Fasting logs do not exist server-side.
+
+    Conventions (details in docs/API.md):
+    - JSON bodies with camelCase fields. Enums are UPPER_SNAKE. Timestamps are RFC 3339 UTC (`2026-10-17T09:40:00Z`).
+      Local dates are `YYYY-MM-DD`. Local times are `HH:mm`.
+    - Money and rates are **decimal strings** (`"23714.55"`).
+    - Errors are `application/problem+json` (RFC 9457) with a stable `code`.
+    - Collections return `{ "data": [...] }`. Paginated collections add `page.nextCursor`.
+    - `Authorization: Bearer <accessToken>` unless an operation says `security: []`.
+    - Operations marked `x-sakina-child-allowed: true` also accept child-scoped tokens (scope=child).
+      Every other protected operation requires scope=user.
+    - Operations marked `x-sakina-plus-required: true` return 403 `PLUS_REQUIRED` without an active Plus entitlement.
+  contact:
+    name: Sakina engineering
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.sakina.app/api/v1
+    description: Production
+  - url: https://api.staging.sakina.app/api/v1
+    description: Staging
+  - url: http://localhost:5080/api/v1
+    description: Local development
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+    description: Email/password, Google and Apple sign-in, refresh-token rotation, child device linking
+  - name: Me
+    description: The signed-in user's profile, preferences and account deletion
+  - name: Families
+    description: Families (Plus), account members, child profiles without accounts, invites
+  - name: WorshipSync
+    description: Opt-in prayer logs, Quran progress, Quran state, zakat records
+  - name: Encouragements
+    description: Parent-to-child encouragements delivered as data-only push
+  - name: Rates
+    description: Gold and silver prices per gram for the zakat calculator
+  - name: Masjids
+    description: Public masjid search (coarse area only), detail, iqamah, announcements, follow
+  - name: MasjidAdmin
+    description: Masjid console operations (iqamah, announcements, groups, funds, rota, roles)
+  - name: Staff
+    description: Sakina staff operations (masjid verification)
+  - name: Billing
+    description: RevenueCat webhook and Plus entitlements
+  - name: Diagnostics
+    description: User-reviewed adhan diagnostic reports
+  - name: Health
+    description: Liveness and readiness probes (served outside /api/v1)
+paths:
+  # ───────────────────────────── Auth ─────────────────────────────
+  /auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Create an account with email and password
+      security: []
+      x-sakina-rate-limit: auth-register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Account created, signed in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Sign in with email and password
+      security: []
+      x-sakina-rate-limit: auth-login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshToken
+      summary: Exchange a refresh token for a new access + refresh token (rotation)
+      description: |
+        The presented refresh token is consumed. Presenting an already-consumed token revokes
+        the whole token chain and returns 401 `REFRESH_TOKEN_REUSED`.
+      security: []
+      x-sakina-rate-limit: auth-refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '200':
+          description: New tokens
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/social:
+    post:
+      tags: [Auth]
+      operationId: socialSignIn
+      summary: Sign in or sign up with a Google or Apple ID token
+      security: []
+      x-sakina-rate-limit: auth-login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SocialSignInRequest' }
+      responses:
+        '200':
+          description: Existing account signed in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '201':
+          description: New account created and signed in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke a refresh token chain (this device) or all of the user's sessions
+      description: The refresh token in the body is the credential, so this works even after the access token has expired.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LogoutRequest' }
+      responses:
+        '204': { description: Logged out (also returned for unknown or already-revoked tokens) }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /auth/password/forgot:
+    post:
+      tags: [Auth]
+      operationId: forgotPassword
+      summary: Request a password-reset email
+      description: Always returns 202, whether or not the email exists.
+      security: []
+      x-sakina-rate-limit: auth-register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+      responses:
+        '202': { description: Accepted }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/password/reset:
+    post:
+      tags: [Auth]
+      operationId: resetPassword
+      summary: Set a new password with a reset token. Revokes all sessions
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token, newPassword]
+              properties:
+                token: { type: string, minLength: 20, maxLength: 200 }
+                newPassword: { $ref: '#/components/schemas/Password' }
+      responses:
+        '204': { description: Password changed }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /auth/child-link:
+    post:
+      tags: [Auth]
+      operationId: linkChildDevice
+      summary: Link a child's device to a child profile using a 6-digit guardian code
+      description: Returns a child-scoped session (scope=child). The code is single use and valid for 10 minutes.
+      security: []
+      x-sakina-rate-limit: child-link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { type: string, pattern: '^[0-9]{6}$', examples: ['482913'] }
+      responses:
+        '200':
+          description: Child session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChildSession' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ───────────────────────────── Me ─────────────────────────────
+  /me:
+    get:
+      tags: [Me]
+      operationId: getMe
+      summary: The signed-in user's profile
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    patch:
+      tags: [Me]
+      operationId: updateMe
+      summary: Update display name, locale or notification preferences (merge-patch semantics)
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/UpdateMeRequest' }
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateMeRequest' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [Me]
+      operationId: deleteMe
+      summary: Delete the account and all server-side data
+      description: |
+        Tokens are revoked immediately and data is hard-deleted within 24 hours (SPEC ME-3).
+        Store subscriptions must be cancelled in the store; the client shows a deep link.
+      responses:
+        '202':
+          description: Deletion scheduled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deletionScheduledFor]
+                properties:
+                  deletionScheduledFor: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/entitlements:
+    get:
+      tags: [Billing]
+      operationId: getMyEntitlements
+      summary: The current Plus entitlement (own purchase or via family)
+      responses:
+        '200':
+          description: Entitlements
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entitlements' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/entitlements/refresh:
+    post:
+      tags: [Billing]
+      operationId: refreshMyEntitlements
+      summary: Force a RevenueCat lookup (e.g. right after purchase or restore)
+      x-sakina-rate-limit: entitlement-refresh
+      responses:
+        '200':
+          description: Recomputed entitlements
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Entitlements' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /me/quran-state:
+    get:
+      tags: [WorshipSync]
+      operationId: getMyQuranState
+      summary: Synced bookmarks, last-read position and memorisation (Plus sync)
+      x-sakina-plus-required: true
+      responses:
+        '200':
+          description: Current state
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuranState' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [WorshipSync]
+      operationId: putMyQuranState
+      summary: Replace the synced Quran state (optimistic concurrency)
+      description: |
+        Send `If-Match` with the last ETag. Omit `If-Match` only when creating for the first time;
+        if a document already exists, that returns 428. On 412 the response body contains the current
+        document so the client can merge (ARCHITECTURE §3.4) and retry.
+      x-sakina-plus-required: true
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuranStateInput' }
+      responses:
+        '200':
+          description: Saved
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuranState' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '412':
+          description: Version conflict. Body is the current server document
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuranState' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+    delete:
+      tags: [WorshipSync]
+      operationId: deleteMyQuranState
+      summary: Delete the server copy (sync turned off)
+      responses:
+        '204': { description: Deleted (idempotent) }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/zakat-records:
+    get:
+      tags: [WorshipSync]
+      operationId: listMyZakatRecords
+      summary: Backed-up yearly zakat records
+      x-sakina-plus-required: true
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Records, newest Hijri year first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ZakatRecord' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [WorshipSync]
+      operationId: createMyZakatRecord
+      summary: Back up a zakat record
+      x-sakina-plus-required: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ZakatRecordInput' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ZakatRecord' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [WorshipSync]
+      operationId: deleteAllMyZakatRecords
+      summary: Delete every backed-up zakat record (backup turned off)
+      responses:
+        '204': { description: Deleted (idempotent) }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/zakat-records/{recordId}:
+    parameters:
+      - $ref: '#/components/parameters/RecordId'
+    get:
+      tags: [WorshipSync]
+      operationId: getMyZakatRecord
+      summary: One zakat record
+      x-sakina-plus-required: true
+      responses:
+        '200':
+          description: Record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ZakatRecord' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [WorshipSync]
+      operationId: replaceMyZakatRecord
+      summary: Replace a zakat record
+      x-sakina-plus-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ZakatRecordInput' }
+      responses:
+        '200':
+          description: Replaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ZakatRecord' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [WorshipSync]
+      operationId: deleteMyZakatRecord
+      summary: Delete one zakat record
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/follows:
+    get:
+      tags: [Masjids]
+      operationId: listMyFollows
+      summary: Masjids I follow, with the audience groups I chose
+      responses:
+        '200':
+          description: Follows
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Follow' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  # ───────────────────────────── Families ─────────────────────────────
+  /families:
+    post:
+      tags: [Families]
+      operationId: createFamily
+      summary: Create a family. The caller becomes OWNER
+      x-sakina-plus-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 60, examples: ['The Rahman family'] }
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Family' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /families/mine:
+    get:
+      tags: [Families]
+      operationId: listMyFamilies
+      summary: Families the caller belongs to (at most 2), with members
+      x-sakina-child-allowed: true
+      responses:
+        '200':
+          description: Families
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    maxItems: 2
+                    items: { $ref: '#/components/schemas/Family' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /families/join:
+    post:
+      tags: [Families]
+      operationId: joinFamily
+      summary: Join a family with an invite code
+      x-sakina-rate-limit: family-join
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { $ref: '#/components/schemas/InviteCode' }
+      responses:
+        '200':
+          description: Joined. Returns the family
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Family' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /families/{familyId}:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+    get:
+      tags: [Families]
+      operationId: getFamily
+      summary: One family with members
+      x-sakina-child-allowed: true
+      responses:
+        '200':
+          description: Family
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Family' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Families]
+      operationId: updateFamily
+      summary: Rename (OWNER)
+      x-sakina-plus-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 60 }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Family' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [Families]
+      operationId: deleteFamily
+      summary: Delete the family, its child profiles and all logs (OWNER)
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /families/{familyId}/invites:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+    get:
+      tags: [Families]
+      operationId: listFamilyInvites
+      summary: Active invite codes (guardians)
+      responses:
+        '200':
+          description: Invites
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/FamilyInvite' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Families]
+      operationId: createFamilyInvite
+      summary: Create an 8-character invite code valid for 7 days (guardians)
+      x-sakina-plus-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role]
+              properties:
+                role: { type: string, enum: [GUARDIAN, MEMBER] }
+      responses:
+        '201':
+          description: Invite created. `code` is returned only in this response
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FamilyInviteCreated' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /families/{familyId}/invites/{inviteId}:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+      - $ref: '#/components/parameters/InviteId'
+    delete:
+      tags: [Families]
+      operationId: revokeFamilyInvite
+      summary: Revoke an invite code (guardians)
+      responses:
+        '204': { description: Revoked (idempotent) }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /families/{familyId}/members:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+    get:
+      tags: [Families]
+      operationId: listFamilyMembers
+      summary: Account members and child profiles in one list
+      x-sakina-child-allowed: true
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    maxItems: 6
+                    items: { $ref: '#/components/schemas/FamilyMember' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /families/{familyId}/members/{memberId}:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+      - $ref: '#/components/parameters/MemberId'
+    patch:
+      tags: [Families]
+      operationId: updateFamilyMember
+      summary: Change role (OWNER) or own sharing preference (self) of an account member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                role: { type: string, enum: [OWNER, GUARDIAN, MEMBER], description: Setting OWNER transfers ownership; the previous owner becomes GUARDIAN }
+                shareWorship: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FamilyMember' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [Families]
+      operationId: removeFamilyMember
+      summary: Remove an account member (guardians) or leave (self). The OWNER cannot leave without transferring
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /families/{familyId}/children:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+    post:
+      tags: [Families]
+      operationId: createChildProfile
+      summary: Add a child profile without an account (guardians)
+      x-sakina-plus-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChildProfileInput' }
+      responses:
+        '201':
+          description: Created. Returned as a FamilyMember with kind=CHILD
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FamilyMember' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /families/{familyId}/children/{childId}:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+      - $ref: '#/components/parameters/ChildId'
+    patch:
+      tags: [Families]
+      operationId: updateChildProfile
+      summary: Edit a child profile (guardians)
+      x-sakina-plus-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChildProfilePatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FamilyMember' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [Families]
+      operationId: deleteChildProfile
+      summary: Delete a child profile and all of its logs. Revokes linked devices (guardians)
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /families/{familyId}/children/{childId}/link-codes:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+      - $ref: '#/components/parameters/ChildId'
+    post:
+      tags: [Families]
+      operationId: createChildLinkCode
+      summary: Create a 6-digit code to link a child's device (guardians, valid for 10 minutes)
+      x-sakina-plus-required: true
+      responses:
+        '201':
+          description: Code created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, expiresAt]
+                properties:
+                  code: { type: string, pattern: '^[0-9]{6}$' }
+                  expiresAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Worship sync (family) ─────────────────────────────
+  /families/{familyId}/prayer-logs:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+    get:
+      tags: [WorshipSync]
+      operationId: listFamilyPrayerLogs
+      summary: Prayer logs for sharing members in a date range (≤ 62 days)
+      x-sakina-child-allowed: true
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          description: Inclusive. `to - from` must be ≤ 61 days
+          schema: { type: string, format: date }
+        - name: memberId
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/Id' }
+        - name: updatedSince
+          in: query
+          required: false
+          description: Return only entries whose serverUpdatedAt is later than this (incremental pull). Includes tombstones
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, serverTime]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/PrayerLogEntry' }
+                  serverTime: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    put:
+      tags: [WorshipSync]
+      operationId: upsertFamilyPrayerLogs
+      summary: Batch upsert prayer logs (last-write-wins per member/date/prayer)
+      x-sakina-child-allowed: true
+      x-sakina-plus-required: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [entries]
+              properties:
+                entries:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items: { $ref: '#/components/schemas/PrayerLogWrite' }
+      responses:
+        '200':
+          description: Per-entry results, in request order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results, serverTime]
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/PrayerLogWriteResult' }
+                  serverTime: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /families/{familyId}/members/{memberId}/quran-progress:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+      - $ref: '#/components/parameters/MemberId'
+    get:
+      tags: [WorshipSync]
+      operationId: getMemberQuranProgress
+      summary: A member's Quran journey summary (sharing members only)
+      x-sakina-child-allowed: true
+      responses:
+        '200':
+          description: Progress
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuranProgress' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [WorshipSync]
+      operationId: putMemberQuranProgress
+      summary: Set a member's Quran journey summary (self, a linked child device, or guardians for child profiles)
+      x-sakina-child-allowed: true
+      x-sakina-plus-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuranProgressInput' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QuranProgress' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  # ───────────────────────────── Encouragements ─────────────────────────────
+  /families/{familyId}/encouragements:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+    get:
+      tags: [Encouragements]
+      operationId: listEncouragements
+      summary: Encouragements in the family, newest first (filter by recipient)
+      description: A child session sees only encouragements addressed to its child.
+      x-sakina-child-allowed: true
+      parameters:
+        - name: memberId
+          in: query
+          required: false
+          description: Recipient member id
+          schema: { $ref: '#/components/schemas/Id' }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Encouragements
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Encouragement' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Encouragements]
+      operationId: sendEncouragement
+      summary: Send an encouragement. Triggers a data-only OneSignal push to the recipient
+      description: |
+        The push is data-only (`{ type: "encouragement", familyId, encouragementId }`). The recipient
+        device shows it after its locally computed Maghrib (SPEC FAM-8).
+        Limited to 10 per sender per recipient per day (409 `ENCOURAGEMENT_DAILY_LIMIT`).
+      x-sakina-plus-required: true
+      x-sakina-rate-limit: encouragement
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EncouragementInput' }
+      responses:
+        '201':
+          description: Sent (push enqueued)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Encouragement' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /families/{familyId}/encouragements/{encouragementId}/seen:
+    parameters:
+      - $ref: '#/components/parameters/FamilyId'
+      - name: encouragementId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    post:
+      tags: [Encouragements]
+      operationId: markEncouragementSeen
+      summary: Mark an encouragement as seen (recipient only)
+      x-sakina-child-allowed: true
+      responses:
+        '204': { description: Marked (idempotent) }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Rates ─────────────────────────────
+  /rates/currencies:
+    get:
+      tags: [Rates]
+      operationId: listRateCurrencies
+      summary: Currencies supported for metal prices
+      security: []
+      responses:
+        '200':
+          description: ISO 4217 codes
+          headers:
+            Cache-Control: { $ref: '#/components/headers/CacheControlPublic' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/CurrencyCode' }
+                    examples: [[PKR, GBP, USD, EUR, AED, SAR, INR, CAD]]
+
+  /rates/metals:
+    get:
+      tags: [Rates]
+      operationId: getMetalRates
+      summary: Gold (24k) and silver price per gram in a currency (cached ≤ 15 min upstream)
+      security: []
+      parameters:
+        - name: currency
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/CurrencyCode' }
+      responses:
+        '200':
+          description: Rates
+          headers:
+            Cache-Control: { $ref: '#/components/headers/CacheControlPublic' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MetalRates' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  # ───────────────────────────── Masjids (public / congregant) ─────────────────────────────
+  /masjids:
+    get:
+      tags: [Masjids]
+      operationId: searchMasjids
+      summary: Search published masjids by coarse area (geohash-4 cells) and/or name
+      description: |
+        At least one of `cells` or `q` is required. Cells must be exactly 4 characters
+        (about 39 × 20 km). More precise cells return 422 `LOCATION_TOO_PRECISE`. Results include each
+        masjid's public coordinates so that the device computes distance itself. The server never logs `cells`.
+      security: []
+      parameters:
+        - name: cells
+          in: query
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 9
+            items: { type: string, pattern: '^[0123456789bcdefghjkmnpqrstuvwxyz]{4}$' }
+          examples:
+            lahore:
+              value: [ttsg, ttsu, ttse]
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, minLength: 2, maxLength: 80 }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Masjids
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/MasjidSummary' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /masjids/{masjidId}:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [Masjids]
+      operationId: getMasjid
+      summary: Masjid detail (published only)
+      security: []
+      responses:
+        '200':
+          description: Masjid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Masjid' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /masjids/{masjidId}/iqamah:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [Masjids]
+      operationId: getMasjidIqamah
+      summary: Published iqamah timetable for a week
+      security: []
+      parameters:
+        - name: weekStart
+          in: query
+          required: false
+          description: Week start date in the masjid's timezone. Defaults to the current week
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Timetable
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IqamahWeek' }
+        '304': { description: Not modified (If-None-Match matched) }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /masjids/{masjidId}/announcements:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [Masjids]
+      operationId: listMasjidAnnouncements
+      summary: Published announcements (EVERYONE, plus groups the caller follows)
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Announcements, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Announcement' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /masjids/{masjidId}/follow:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    put:
+      tags: [Masjids]
+      operationId: followMasjid
+      summary: Follow a masjid, or update chosen audience groups (idempotent)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                groupIds:
+                  type: array
+                  maxItems: 20
+                  uniqueItems: true
+                  items: { $ref: '#/components/schemas/Id' }
+      responses:
+        '200':
+          description: Following
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Follow' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [Masjids]
+      operationId: unfollowMasjid
+      summary: Unfollow (idempotent)
+      description: Returns 204 even for an unknown masjid or one not followed, so retries are safe.
+      responses:
+        '204': { description: Not following }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  # ───────────────────────────── Masjid admin ─────────────────────────────
+  /admin/masjids:
+    get:
+      tags: [MasjidAdmin]
+      operationId: listAdministeredMasjids
+      summary: Masjids where the caller has a role
+      responses:
+        '200':
+          description: Masjids with the caller's role
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/AdminMasjid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [MasjidAdmin]
+      operationId: registerMasjid
+      summary: Register a masjid. Starts in PENDING_VERIFICATION; the caller becomes OWNER
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MasjidInput' }
+      responses:
+        '201':
+          description: Registered
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminMasjid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/masjids/{masjidId}:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [MasjidAdmin]
+      operationId: getAdministeredMasjid
+      summary: Masjid as seen by an admin, including unpublished state (EDITOR+)
+      responses:
+        '200':
+          description: Masjid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminMasjid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [MasjidAdmin]
+      operationId: updateAdministeredMasjid
+      summary: Update profile, calculation method or Jumu'ah settings (ADMIN+)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MasjidPatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminMasjid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/masjids/{masjidId}/stats:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [MasjidAdmin]
+      operationId: getMasjidStats
+      summary: Console overview figures (EDITOR+)
+      responses:
+        '200':
+          description: Stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MasjidStats' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/masjids/{masjidId}/iqamah/draft:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [MasjidAdmin]
+      operationId: getIqamahDraft
+      summary: The draft timetable for a week. Created from the last published week if absent (EDITOR+)
+      parameters:
+        - name: weekStart
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Draft
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IqamahWeek' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    put:
+      tags: [MasjidAdmin]
+      operationId: putIqamahDraft
+      summary: Replace the draft rows for a week (EDITOR+)
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IqamahWeekInput' }
+      responses:
+        '200':
+          description: Draft saved
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IqamahWeek' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/masjids/{masjidId}/iqamah/publish:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    post:
+      tags: [MasjidAdmin]
+      operationId: publishIqamah
+      summary: Publish a week's draft and optionally notify followers (EDITOR+)
+      description: Idempotent per draft version. Publishing the same version twice returns the first result and sends no second push.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [weekStart, version]
+              properties:
+                weekStart: { type: string, format: date }
+                version: { type: integer, minimum: 1, description: The draft version being published (from the draft's ETag/version) }
+                notify: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Published
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [week, notifiedCount]
+                properties:
+                  week: { $ref: '#/components/schemas/IqamahWeek' }
+                  notifiedCount: { type: integer, minimum: 0 }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/masjids/{masjidId}/announcements:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [MasjidAdmin]
+      operationId: listAdminAnnouncements
+      summary: Sent announcements with delivery stats (EDITOR+)
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Announcements
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Announcement' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [MasjidAdmin]
+      operationId: postAnnouncement
+      summary: Post an announcement and push it to the audience (EDITOR+)
+      description: Push fan-out is asynchronous (outbox, OneSignal batches of ≤ 2,000 external IDs).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnnouncementInput' }
+      responses:
+        '201':
+          description: Posted. `recipients` is the audience size at send time
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Announcement' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/masjids/{masjidId}/groups:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [MasjidAdmin]
+      operationId: listAudienceGroups
+      summary: Audience groups with member counts (EDITOR+)
+      responses:
+        '200':
+          description: Groups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/AudienceGroup' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [MasjidAdmin]
+      operationId: createAudienceGroup
+      summary: Create an audience group (ADMIN+)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AudienceGroupInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceGroup' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/masjids/{masjidId}/groups/{groupId}:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+      - $ref: '#/components/parameters/GroupId'
+    patch:
+      tags: [MasjidAdmin]
+      operationId: updateAudienceGroup
+      summary: Rename a group (ADMIN+)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AudienceGroupInput' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceGroup' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [MasjidAdmin]
+      operationId: deleteAudienceGroup
+      summary: Delete a group. Followers keep following (ADMIN+)
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/masjids/{masjidId}/funds:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [MasjidAdmin]
+      operationId: listFunds
+      summary: Funds with this month's totals (ADMIN+)
+      parameters:
+        - name: month
+          in: query
+          required: false
+          description: Month for totals, `YYYY-MM`. Defaults to the current month in the masjid's timezone
+          schema: { type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$' }
+      responses:
+        '200':
+          description: Funds
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Fund' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [MasjidAdmin]
+      operationId: createFund
+      summary: Create a fund (ADMIN+)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FundInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Fund' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/masjids/{masjidId}/funds/{fundId}:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+      - $ref: '#/components/parameters/FundId'
+    patch:
+      tags: [MasjidAdmin]
+      operationId: updateFund
+      summary: Update a fund (ADMIN+). The currency cannot change once entries exist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FundPatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Fund' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [MasjidAdmin]
+      operationId: deleteFund
+      summary: Delete a fund with no entries (ADMIN+)
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/masjids/{masjidId}/funds/{fundId}/entries:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+      - $ref: '#/components/parameters/FundId'
+    get:
+      tags: [MasjidAdmin]
+      operationId: listFundEntries
+      summary: Manual donation entries (ADMIN+)
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Entries, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/FundEntry' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [MasjidAdmin]
+      operationId: createFundEntry
+      summary: Record a donation received offline. No donor personal data (ADMIN+)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FundEntryInput' }
+      responses:
+        '201':
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FundEntry' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/masjids/{masjidId}/rota/shifts:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [MasjidAdmin]
+      operationId: listRotaShifts
+      summary: Volunteer shifts in a date range (EDITOR+)
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Shifts ordered by date and start time
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RotaShift' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    post:
+      tags: [MasjidAdmin]
+      operationId: createRotaShift
+      summary: Add a volunteer shift (ADMIN+)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RotaShiftInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RotaShift' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/masjids/{masjidId}/rota/shifts/{shiftId}:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+      - $ref: '#/components/parameters/ShiftId'
+    patch:
+      tags: [MasjidAdmin]
+      operationId: updateRotaShift
+      summary: Update a shift, e.g. assign volunteers (ADMIN+)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RotaShiftPatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RotaShift' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [MasjidAdmin]
+      operationId: deleteRotaShift
+      summary: Delete a shift (ADMIN+)
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/masjids/{masjidId}/roles:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [MasjidAdmin]
+      operationId: listMasjidRoles
+      summary: People with console access (OWNER)
+      responses:
+        '200':
+          description: Roles
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/MasjidRoleAssignment' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/masjids/{masjidId}/roles/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+      - name: userId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    patch:
+      tags: [MasjidAdmin]
+      operationId: updateMasjidRole
+      summary: Change someone's role (OWNER). A masjid always keeps at least one OWNER
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role]
+              properties:
+                role: { $ref: '#/components/schemas/MasjidRole' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MasjidRoleAssignment' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [MasjidAdmin]
+      operationId: removeMasjidRole
+      summary: Remove someone's console access (OWNER), or leave (self)
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/masjids/{masjidId}/role-invites:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    post:
+      tags: [MasjidAdmin]
+      operationId: createMasjidRoleInvite
+      summary: Create an invite code granting a console role, valid for 7 days (OWNER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role]
+              properties:
+                role: { $ref: '#/components/schemas/MasjidRole' }
+      responses:
+        '201':
+          description: Invite created. `code` is returned only here
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, code, role, expiresAt]
+                properties:
+                  id: { $ref: '#/components/schemas/Id' }
+                  code: { $ref: '#/components/schemas/InviteCode' }
+                  role: { $ref: '#/components/schemas/MasjidRole' }
+                  expiresAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /admin/role-invites/accept:
+    post:
+      tags: [MasjidAdmin]
+      operationId: acceptMasjidRoleInvite
+      summary: Accept a masjid console invite
+      x-sakina-rate-limit: family-join
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { $ref: '#/components/schemas/InviteCode' }
+      responses:
+        '200':
+          description: Role granted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminMasjid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /masjids/{masjidId}/groups:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    get:
+      tags: [Masjids]
+      operationId: listPublicAudienceGroups
+      summary: Audience groups a follower can opt into
+      security: []
+      responses:
+        '200':
+          description: Groups (without member counts)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/AudienceGroupPublic' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Staff ─────────────────────────────
+  /staff/masjids/{masjidId}/verify:
+    parameters:
+      - $ref: '#/components/parameters/MasjidId'
+    post:
+      tags: [Staff]
+      operationId: verifyMasjid
+      summary: Mark a masjid verified and published, after out-of-band checks (staff role)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status]
+              properties:
+                status: { type: string, enum: [PUBLISHED, SUSPENDED] }
+                note: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminMasjid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  # ───────────────────────────── Billing ─────────────────────────────
+  /billing/revenuecat/webhook:
+    post:
+      tags: [Billing]
+      operationId: revenueCatWebhook
+      summary: RevenueCat webhook receiver
+      description: |
+        Authenticated by the shared secret configured in the RevenueCat dashboard, sent as
+        `Authorization: Bearer <secret>`. Idempotent on `event.id`. The handler persists the event,
+        returns 200, and recomputes entitlements asynchronously by fetching the subscriber from the
+        RevenueCat REST API, so out-of-order delivery is harmless.
+      security:
+        - revenueCatWebhookSecret: []
+      x-sakina-rate-limit: webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevenueCatWebhook' }
+      responses:
+        '200': { description: Accepted (including duplicates and ignored event types) }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  # ───────────────────────────── Diagnostics ─────────────────────────────
+  /diagnostics/reports:
+    post:
+      tags: [Diagnostics]
+      operationId: submitDiagnosticReport
+      summary: Submit a user-reviewed diagnostic report (kept 30 days)
+      description: Reports containing coordinate-like values are rejected with 422 `LOCATION_NOT_ALLOWED`.
+      security:
+        - {}
+        - bearerAuth: []
+      x-sakina-rate-limit: diagnostics
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DiagnosticReport' }
+      responses:
+        '202':
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reference]
+                properties:
+                  reference: { type: string, description: Short code the user can quote to support, examples: ['DX-7Q4K2'] }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ───────────────────────────── Health (outside /api/v1) ─────────────────────────────
+  /health/live:
+    servers:
+      - url: https://api.sakina.app
+    get:
+      tags: [Health]
+      operationId: healthLive
+      summary: Liveness (process up)
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+  /health/ready:
+    servers:
+      - url: https://api.sakina.app
+    get:
+      tags: [Health]
+      operationId: healthReady
+      summary: Readiness (database reachable, outbox lag < 5 min)
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+        '503': { $ref: '#/components/responses/Health' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from /auth/*. 15-minute lifetime. Claims include `scope` (user | child).
+    revenueCatWebhookSecret:
+      type: http
+      scheme: bearer
+      description: Shared secret configured in the RevenueCat webhook settings (`RevenueCat__WebhookSecret`).
+
+  parameters:
+    FamilyId:
+      name: familyId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    MemberId:
+      name: memberId
+      in: path
+      required: true
+      description: A FamilyMember id (account member or child profile)
+      schema: { $ref: '#/components/schemas/Id' }
+    ChildId:
+      name: childId
+      in: path
+      required: true
+      description: The child profile's member id
+      schema: { $ref: '#/components/schemas/Id' }
+    InviteId:
+      name: inviteId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    RecordId:
+      name: recordId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    MasjidId:
+      name: masjidId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    GroupId:
+      name: groupId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    FundId:
+      name: fundId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    ShiftId:
+      name: shiftId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor from a previous response's `page.nextCursor`
+      schema: { type: string, maxLength: 512 }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Client-generated UUID. A repeat of the same key by the same caller within 24 h returns the
+        original response without repeating side effects. Reusing a key with a different body → 409 `IDEMPOTENCY_KEY_REUSED`.
+      schema: { type: string, format: uuid }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: ETag from the last read, for optimistic concurrency
+      schema: { type: string }
+
+  headers:
+    ETag:
+      description: Version tag for optimistic concurrency / caching (e.g. `"7"`)
+      schema: { type: string }
+    Location:
+      description: URL of the created resource
+      schema: { type: string, format: uri-reference }
+    RetryAfter:
+      description: Seconds to wait before retrying
+      schema: { type: integer, minimum: 1 }
+    CacheControlPublic:
+      description: e.g. `public, max-age=300`
+      schema: { type: string }
+
+  responses:
+    Unauthenticated:
+      description: Missing, invalid or expired credentials (`UNAUTHENTICATED`, `INVALID_CREDENTIALS`, `TOKEN_EXPIRED`, `REFRESH_TOKEN_REUSED`, `SOCIAL_TOKEN_INVALID`, `RESET_TOKEN_INVALID`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Authenticated but not allowed (`PLUS_REQUIRED`, `ROLE_REQUIRED`, `CHILD_SCOPE_NOT_ALLOWED`, `FAMILY_READ_ONLY`, `NOT_SHARING`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Not found, or not visible to the caller (`NOT_FOUND`, `INVITE_NOT_FOUND`, `LINK_CODE_NOT_FOUND`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: State conflict (`EMAIL_TAKEN`, `ACCOUNT_EXISTS`, `ALREADY_MEMBER`, `FAMILY_FULL`, `FAMILY_LIMIT_REACHED`, `OWNER_MUST_TRANSFER`, `LAST_OWNER`, `ENCOURAGEMENT_DAILY_LIMIT`, `DRAFT_VERSION_STALE`, `FUND_HAS_ENTRIES`, `GROUP_NAME_TAKEN`, `IDEMPOTENCY_KEY_REUSED`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ValidationFailed:
+      description: Request is well-formed JSON but invalid (`VALIDATION_FAILED`, `LOCATION_TOO_PRECISE`, `LOCATION_NOT_ALLOWED`, `UNSUPPORTED_CURRENCY`, `PASSWORD_TOO_WEAK`). Malformed JSON also returns 422 with code `MALFORMED_JSON`.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ValidationProblem' }
+    PreconditionFailed:
+      description: '`If-Match` did not match the current version (`VERSION_CONFLICT`)'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    PreconditionRequired:
+      description: '`If-Match` is required because the resource exists (`PRECONDITION_REQUIRED`)'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    PayloadTooLarge:
+      description: Body exceeds the limit (`PAYLOAD_TOO_LARGE`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    RateLimited:
+      description: Too many requests (`RATE_LIMITED`)
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ServiceUnavailable:
+      description: Dependency unavailable (`RATES_UNAVAILABLE`, `UPSTREAM_UNAVAILABLE`)
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Health:
+      description: Health status
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [status]
+            properties:
+              status: { type: string, enum: [Healthy, Degraded, Unhealthy] }
+
+  schemas:
+    # ── primitives ──
+    Id:
+      type: string
+      format: uuid
+      description: UUID (v7, time-ordered)
+      examples: ['01928c6e-7a3f-7c4e-9d2b-3f1a6b0e5c21']
+    Decimal:
+      type: string
+      pattern: '^-?[0-9]{1,15}(\.[0-9]{1,6})?$'
+      description: Decimal number as a string, to avoid floating-point loss
+      examples: ['23714.55']
+    NonNegativeDecimal:
+      type: string
+      pattern: '^[0-9]{1,15}(\.[0-9]{1,6})?$'
+      examples: ['1450000']
+    CurrencyCode:
+      type: string
+      pattern: '^[A-Z]{3}$'
+      description: ISO 4217
+      examples: [PKR]
+    Locale:
+      type: string
+      enum: [en, ur, ar]
+    LocalTime:
+      type: string
+      pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+      examples: ['13:30']
+    Prayer:
+      type: string
+      enum: [FAJR, DHUHR, ASR, MAGHRIB, ISHA]
+    Password:
+      type: string
+      minLength: 10
+      maxLength: 128
+      format: password
+    InviteCode:
+      type: string
+      pattern: '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$'
+      description: 8 characters from an unambiguous alphabet (no 0/O/1/I). Case-insensitive on input
+      examples: ['K7MQ2XRA']
+    PageInfo:
+      type: object
+      required: [limit, nextCursor]
+      properties:
+        limit: { type: integer }
+        nextCursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page. `null` means this is the last page
+
+    # ── errors ──
+    Problem:
+      type: object
+      description: RFC 9457 problem details with Sakina extensions
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: '`https://sakina.app/problems/<code-kebab>`'
+          examples: ['https://sakina.app/problems/plus-required']
+        title: { type: string, examples: ['Sakina Plus is required'] }
+        status: { type: integer, examples: [403] }
+        detail: { type: string, description: "Human-readable, English, for developers. Clients localise by `code`" }
+        instance: { type: string, description: Request path }
+        code:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]+$'
+          description: Stable machine-readable error code (see API.md §4)
+          examples: [PLUS_REQUIRED]
+        traceId: { type: string, description: "W3C trace id, for support" }
+    ValidationProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            errors:
+              type: object
+              description: Map of camelCase JSON path → messages
+              additionalProperties:
+                type: array
+                items: { type: string }
+              examples:
+                - { 'entries[3].date': ['Date is more than 1 day in the future.'] }
+
+    # ── auth ──
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { $ref: '#/components/schemas/Password' }
+        displayName: { type: string, minLength: 1, maxLength: 60 }
+        locale: { $ref: '#/components/schemas/Locale' }
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 1, maxLength: 128, format: password }
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string, minLength: 20, maxLength: 200 }
+    LogoutRequest:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string, minLength: 20, maxLength: 200 }
+        allDevices: { type: boolean, default: false }
+    SocialSignInRequest:
+      type: object
+      additionalProperties: false
+      required: [provider, idToken]
+      properties:
+        provider: { type: string, enum: [GOOGLE, APPLE] }
+        idToken: { type: string, minLength: 20, maxLength: 4096 }
+        nonce: { type: string, maxLength: 128, description: "Raw nonce (Apple, required). Its SHA-256 must equal the token's `nonce` claim" }
+        displayName: { type: string, maxLength: 60, description: Apple supplies the name only on first sign-in; the client forwards it }
+        locale: { $ref: '#/components/schemas/Locale' }
+    TokenPair:
+      type: object
+      required: [accessToken, accessTokenExpiresAt, refreshToken, refreshTokenExpiresAt, tokenType]
+      properties:
+        accessToken: { type: string }
+        accessTokenExpiresAt: { type: string, format: date-time }
+        refreshToken: { type: string }
+        refreshTokenExpiresAt: { type: string, format: date-time }
+        tokenType: { type: string, const: Bearer }
+    AuthSession:
+      type: object
+      required: [tokens, user]
+      properties:
+        tokens: { $ref: '#/components/schemas/TokenPair' }
+        user: { $ref: '#/components/schemas/Me' }
+    ChildSession:
+      type: object
+      required: [tokens, child]
+      properties:
+        tokens: { $ref: '#/components/schemas/TokenPair' }
+        child:
+          type: object
+          required: [memberId, familyId, displayName, color]
+          properties:
+            memberId: { $ref: '#/components/schemas/Id' }
+            familyId: { $ref: '#/components/schemas/Id' }
+            displayName: { type: string }
+            color: { $ref: '#/components/schemas/ProfileColor' }
+
+    # ── me ──
+    NotificationPreferences:
+      type: object
+      additionalProperties: false
+      properties:
+        encouragements: { type: boolean, default: true }
+        masjidAnnouncements: { type: boolean, default: true }
+        billingReminders: { type: boolean, default: true }
+    Me:
+      type: object
+      required: [id, displayName, locale, authMethods, preferences, families, isStaff, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        email: { type: [string, 'null'], format: email }
+        displayName: { type: string }
+        locale: { $ref: '#/components/schemas/Locale' }
+        authMethods:
+          type: array
+          items: { type: string, enum: [PASSWORD, GOOGLE, APPLE] }
+        preferences: { $ref: '#/components/schemas/NotificationPreferences' }
+        families:
+          type: array
+          items:
+            type: object
+            required: [familyId, memberId, role]
+            properties:
+              familyId: { $ref: '#/components/schemas/Id' }
+              memberId: { $ref: '#/components/schemas/Id' }
+              role: { $ref: '#/components/schemas/FamilyRole' }
+        isStaff: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    UpdateMeRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 60 }
+        locale: { $ref: '#/components/schemas/Locale' }
+        preferences: { $ref: '#/components/schemas/NotificationPreferences' }
+
+    # ── billing ──
+    Entitlements:
+      type: object
+      required: [plus]
+      properties:
+        plus:
+          type: object
+          required: [active, source]
+          properties:
+            active: { type: boolean }
+            source: { type: string, enum: [PURCHASE, FAMILY, NONE] }
+            productId: { type: [string, 'null'], examples: ['sakina_plus_family_yearly'] }
+            expiresAt: { type: [string, 'null'], format: date-time }
+            willRenew: { type: [boolean, 'null'] }
+            isTrial: { type: [boolean, 'null'] }
+            familyId: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }], description: Set when source=FAMILY }
+    RevenueCatWebhook:
+      type: object
+      description: Subset of the RevenueCat webhook body that the server reads. Unknown fields are ignored (this is the one endpoint that tolerates them).
+      required: [api_version, event]
+      properties:
+        api_version: { type: string }
+        event:
+          type: object
+          required: [id, type, app_user_id]
+          properties:
+            id: { type: string }
+            type:
+              type: string
+              description: e.g. INITIAL_PURCHASE, RENEWAL, CANCELLATION, UNCANCELLATION, NON_RENEWING_PURCHASE, EXPIRATION, BILLING_ISSUE, PRODUCT_CHANGE, TRANSFER, SUBSCRIPTION_EXTENDED, TEST
+            app_user_id: { type: string }
+            original_app_user_id: { type: string }
+            aliases: { type: array, items: { type: string } }
+            transferred_from: { type: array, items: { type: string } }
+            transferred_to: { type: array, items: { type: string } }
+            entitlement_ids: { type: [array, 'null'], items: { type: string } }
+            product_id: { type: string }
+            period_type: { type: string }
+            event_timestamp_ms: { type: integer }
+            expiration_at_ms: { type: [integer, 'null'] }
+            environment: { type: string, enum: [SANDBOX, PRODUCTION] }
+          additionalProperties: true
+      additionalProperties: true
+
+    # ── families ──
+    FamilyRole:
+      type: string
+      enum: [OWNER, GUARDIAN, MEMBER, CHILD]
+      description: CHILD is used only for child profiles (kind=CHILD)
+    ProfileColor:
+      type: string
+      enum: [TEAL, ROSE, GOLD, SAND, INK]
+      description: Maps to design tokens (DESIGN_TOKENS §2.5)
+    Family:
+      type: object
+      required: [id, name, status, ownerMemberId, members, maxMembers, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        status: { type: string, enum: [ACTIVE, READ_ONLY, ARCHIVED], description: READ_ONLY while the owner's Plus is inactive }
+        ownerMemberId: { $ref: '#/components/schemas/Id' }
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/FamilyMember' }
+        maxMembers: { type: integer, const: 6 }
+        createdAt: { type: string, format: date-time }
+    FamilyMember:
+      type: object
+      required: [id, kind, role, displayName, color, shareWorship, hasLinkedDevice]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        kind: { type: string, enum: [ACCOUNT, CHILD] }
+        role: { $ref: '#/components/schemas/FamilyRole' }
+        displayName: { type: string }
+        color: { $ref: '#/components/schemas/ProfileColor' }
+        birthYear: { type: [integer, 'null'], minimum: 1900, maximum: 2100, description: "Child profiles only, optional" }
+        shareWorship: { type: boolean, description: Whether this member's prayer logs and Quran progress are visible to the family }
+        hasLinkedDevice: { type: boolean, description: Child profiles only. True when a device is linked }
+        isMe: { type: boolean, description: True for the caller's own member record }
+    ChildProfileInput:
+      type: object
+      additionalProperties: false
+      required: [displayName, color]
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 40 }
+        birthYear: { type: integer, minimum: 2000, maximum: 2100 }
+        color: { $ref: '#/components/schemas/ProfileColor' }
+    ChildProfilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 40 }
+        birthYear: { type: [integer, 'null'], minimum: 2000, maximum: 2100 }
+        color: { $ref: '#/components/schemas/ProfileColor' }
+    FamilyInvite:
+      type: object
+      required: [id, role, expiresAt, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        role: { type: string, enum: [GUARDIAN, MEMBER] }
+        codeHint: { type: string, description: "Last 2 characters of the code, for display" }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    FamilyInviteCreated:
+      allOf:
+        - $ref: '#/components/schemas/FamilyInvite'
+        - type: object
+          required: [code]
+          properties:
+            code: { $ref: '#/components/schemas/InviteCode' }
+            shareUrl: { type: string, format: uri, examples: ['https://sakina.app/join/K7MQ2XRA'] }
+
+    # ── worship sync ──
+    PrayerStatus:
+      type:
+        - string
+        - 'null'
+      enum: [ON_TIME, LATE, null]
+      description: There is deliberately no MISSED or EXCUSED state (SPEC D-5, P5). null = not logged
+    PrayerLogWrite:
+      type: object
+      additionalProperties: false
+      required: [memberId, date, prayer, status, clientUpdatedAt]
+      properties:
+        memberId: { $ref: '#/components/schemas/Id' }
+        date: { type: string, format: date, description: Local calendar date of the prayer on the logging device }
+        prayer: { $ref: '#/components/schemas/Prayer' }
+        status: { $ref: '#/components/schemas/PrayerStatus' }
+        clientUpdatedAt: { type: string, format: date-time }
+    PrayerLogWriteResult:
+      type: object
+      required: [memberId, date, prayer, applied]
+      properties:
+        memberId: { $ref: '#/components/schemas/Id' }
+        date: { type: string, format: date }
+        prayer: { $ref: '#/components/schemas/Prayer' }
+        applied: { type: boolean, description: false when the server already had a newer clientUpdatedAt }
+        current: { $ref: '#/components/schemas/PrayerLogEntry' }
+    PrayerLogEntry:
+      type: object
+      required: [memberId, date, prayer, status, clientUpdatedAt, serverUpdatedAt]
+      properties:
+        memberId: { $ref: '#/components/schemas/Id' }
+        date: { type: string, format: date }
+        prayer: { $ref: '#/components/schemas/Prayer' }
+        status: { $ref: '#/components/schemas/PrayerStatus' }
+        clientUpdatedAt: { type: string, format: date-time }
+        serverUpdatedAt: { type: string, format: date-time }
+    QuranTrack:
+      type: string
+      enum: [QAIDA, NAZIRA, HIFZ]
+    QuranProgressInput:
+      type: object
+      additionalProperties: false
+      required: [track, label, percent]
+      properties:
+        track: { $ref: '#/components/schemas/QuranTrack' }
+        label: { type: string, maxLength: 40, examples: ['Juz Amma'] }
+        percent: { type: integer, minimum: 0, maximum: 100 }
+        detail: { type: string, maxLength: 120, examples: ['23 of 37 surahs memorised · revised Surah Al-Mulk twice'] }
+        memorisedSurahs:
+          type: array
+          uniqueItems: true
+          maxItems: 114
+          items: { type: integer, minimum: 1, maximum: 114 }
+    QuranProgress:
+      allOf:
+        - $ref: '#/components/schemas/QuranProgressInput'
+        - type: object
+          required: [memberId, updatedAt]
+          properties:
+            memberId: { $ref: '#/components/schemas/Id' }
+            updatedAt: { type: string, format: date-time }
+    QuranStateInput:
+      type: object
+      additionalProperties: false
+      required: [bookmarks, memorisation]
+      description: Total serialised size ≤ 256 KB
+      properties:
+        bookmarks:
+          type: array
+          maxItems: 2000
+          items:
+            type: object
+            additionalProperties: false
+            required: [surah, ayah, createdAt]
+            properties:
+              surah: { type: integer, minimum: 1, maximum: 114 }
+              ayah: { type: integer, minimum: 1, maximum: 286 }
+              note: { type: string, maxLength: 280 }
+              createdAt: { type: string, format: date-time }
+        lastRead:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [surah, ayah, updatedAt]
+          properties:
+            surah: { type: integer, minimum: 1, maximum: 114 }
+            ayah: { type: integer, minimum: 1, maximum: 286 }
+            updatedAt: { type: string, format: date-time }
+        memorisation:
+          type: object
+          description: Keyed by surah number ("1".."114")
+          propertyNames: { pattern: '^([1-9]|[1-9][0-9]|10[0-9]|11[0-4])$' }
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            required: [status, updatedAt]
+            properties:
+              status: { type: string, enum: [LEARNING, MEMORISED, REVISING] }
+              ayahsMemorised: { type: integer, minimum: 0, maximum: 286 }
+              lastRevisedOn: { type: string, format: date }
+              updatedAt: { type: string, format: date-time }
+    QuranState:
+      allOf:
+        - $ref: '#/components/schemas/QuranStateInput'
+        - type: object
+          required: [version, updatedAt]
+          properties:
+            version: { type: integer, minimum: 1 }
+            updatedAt: { type: string, format: date-time }
+    ZakatRecordInput:
+      type: object
+      additionalProperties: false
+      required: [hijriYear, calculatedOn, currency, nisabStandard, ratesUsed, assets, liabilities, netWealth, zakatDue]
+      properties:
+        hijriYear: { type: integer, minimum: 1400, maximum: 1600, examples: [1448] }
+        calculatedOn: { type: string, format: date }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        nisabStandard: { type: string, enum: [GOLD, SILVER] }
+        ratesUsed:
+          type: object
+          additionalProperties: false
+          required: [gold24kPerGram, silverPerGram, asOf]
+          properties:
+            gold24kPerGram: { $ref: '#/components/schemas/NonNegativeDecimal' }
+            silverPerGram: { $ref: '#/components/schemas/NonNegativeDecimal' }
+            asOf: { type: string, format: date-time }
+            isManual: { type: boolean, default: false }
+        assets:
+          type: object
+          additionalProperties: false
+          required: [cash, gold, silver, investments, other]
+          properties:
+            cash: { $ref: '#/components/schemas/NonNegativeDecimal' }
+            gold: { $ref: '#/components/schemas/NonNegativeDecimal' }
+            goldGrams: { $ref: '#/components/schemas/NonNegativeDecimal' }
+            silver: { $ref: '#/components/schemas/NonNegativeDecimal' }
+            silverGrams: { $ref: '#/components/schemas/NonNegativeDecimal' }
+            investments: { $ref: '#/components/schemas/NonNegativeDecimal' }
+            other: { $ref: '#/components/schemas/NonNegativeDecimal' }
+        liabilities: { $ref: '#/components/schemas/NonNegativeDecimal' }
+        netWealth: { $ref: '#/components/schemas/Decimal' }
+        zakatDue: { $ref: '#/components/schemas/NonNegativeDecimal' }
+        notes: { type: string, maxLength: 500 }
+    ZakatRecord:
+      allOf:
+        - $ref: '#/components/schemas/ZakatRecordInput'
+        - type: object
+          required: [id, createdAt, updatedAt]
+          properties:
+            id: { $ref: '#/components/schemas/Id' }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+
+    # ── encouragements ──
+    EncouragementPreset:
+      type: string
+      enum: [FAJR_EVERY_DAY, PROUD_OF_QURAN, PRAY_ISHA_TOGETHER]
+      description: Localised on the device ("MashaAllah, Fajr every day!", "Proud of your Quran today", "Let's pray Isha together")
+    EncouragementInput:
+      type: object
+      additionalProperties: false
+      required: [toMemberId]
+      description: Exactly one of presetKey or text
+      oneOf:
+        - required: [presetKey]
+        - required: [text]
+      properties:
+        toMemberId: { $ref: '#/components/schemas/Id' }
+        presetKey: { $ref: '#/components/schemas/EncouragementPreset' }
+        text: { type: string, minLength: 1, maxLength: 140 }
+    Encouragement:
+      type: object
+      required: [id, familyId, fromMemberId, toMemberId, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        familyId: { $ref: '#/components/schemas/Id' }
+        fromMemberId: { $ref: '#/components/schemas/Id' }
+        toMemberId: { $ref: '#/components/schemas/Id' }
+        presetKey: { oneOf: [{ $ref: '#/components/schemas/EncouragementPreset' }, { type: 'null' }] }
+        text: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        seenAt: { type: [string, 'null'], format: date-time }
+
+    # ── rates ──
+    MetalRates:
+      type: object
+      required: [currency, gold24kPerGram, silverPerGram, asOf, source, isStale]
+      properties:
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        gold24kPerGram: { $ref: '#/components/schemas/NonNegativeDecimal' }
+        silverPerGram: { $ref: '#/components/schemas/NonNegativeDecimal' }
+        asOf: { type: string, format: date-time, description: When the upstream provider priced it }
+        source: { type: string, description: "Provider name, for attribution" }
+        isStale: { type: boolean, description: True when served from the last known value because the upstream failed (≤ 72 h old) }
+
+    # ── masjids ──
+    CalcMethod:
+      type: string
+      enum: [KARACHI, MWL, ISNA, EGYPT, UMM_AL_QURA, DUBAI, QATAR, KUWAIT, SINGAPORE, TURKEY, TEHRAN, MOONSIGHTING_COMMITTEE, NORTH_AMERICA, OTHER]
+    AsrMadhab:
+      type: string
+      enum: [STANDARD, HANAFI]
+    GeoPoint:
+      type: object
+      description: A public place's coordinates (masjids only, never users)
+      required: [lat, lng]
+      properties:
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lng: { type: number, minimum: -180, maximum: 180 }
+    MasjidSummary:
+      type: object
+      required: [id, name, area, location, timezone, isOnSakina]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string, examples: ['Masjid an-Noor'] }
+        area: { type: string, examples: ['Model Town, Lahore'] }
+        location: { $ref: '#/components/schemas/GeoPoint' }
+        timezone: { type: string, examples: ['Asia/Karachi'] }
+        isOnSakina: { type: boolean, description: True when the masjid publishes iqamah times through the console }
+        todayIqamah:
+          type: [array, 'null']
+          description: Today's published iqamah times in the masjid's timezone, if any
+          items: { $ref: '#/components/schemas/IqamahTime' }
+    Masjid:
+      allOf:
+        - $ref: '#/components/schemas/MasjidSummary'
+        - type: object
+          required: [address, country, calcMethod, asrMadhab, followerCount, isFollowing]
+          properties:
+            address: { type: string }
+            country: { type: string, pattern: '^[A-Z]{2}$' }
+            calcMethod: { $ref: '#/components/schemas/CalcMethod' }
+            asrMadhab: { $ref: '#/components/schemas/AsrMadhab' }
+            website: { type: [string, 'null'], format: uri }
+            phone: { type: [string, 'null'] }
+            followerCount: { type: integer, minimum: 0 }
+            isFollowing: { type: boolean, description: Always false for anonymous callers }
+            groups:
+              type: array
+              items: { $ref: '#/components/schemas/AudienceGroupPublic' }
+    MasjidInput:
+      type: object
+      additionalProperties: false
+      required: [name, address, area, country, location, timezone, calcMethod, asrMadhab]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 120 }
+        address: { type: string, minLength: 5, maxLength: 300 }
+        area: { type: string, minLength: 2, maxLength: 120 }
+        country: { type: string, pattern: '^[A-Z]{2}$' }
+        location: { $ref: '#/components/schemas/GeoPoint' }
+        timezone: { type: string, maxLength: 64, description: IANA timezone }
+        calcMethod: { $ref: '#/components/schemas/CalcMethod' }
+        asrMadhab: { $ref: '#/components/schemas/AsrMadhab' }
+        website: { type: string, format: uri, maxLength: 300 }
+        phone: { type: string, maxLength: 32 }
+    MasjidPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 2, maxLength: 120 }
+        address: { type: string, minLength: 5, maxLength: 300 }
+        area: { type: string, minLength: 2, maxLength: 120 }
+        location: { $ref: '#/components/schemas/GeoPoint' }
+        timezone: { type: string, maxLength: 64 }
+        calcMethod: { $ref: '#/components/schemas/CalcMethod' }
+        asrMadhab: { $ref: '#/components/schemas/AsrMadhab' }
+        website: { type: [string, 'null'], format: uri, maxLength: 300 }
+        phone: { type: [string, 'null'], maxLength: 32 }
+    MasjidRole:
+      type: string
+      enum: [OWNER, ADMIN, EDITOR]
+    AdminMasjid:
+      allOf:
+        - $ref: '#/components/schemas/Masjid'
+        - type: object
+          required: [status, myRole]
+          properties:
+            status: { type: string, enum: [PENDING_VERIFICATION, PUBLISHED, SUSPENDED] }
+            myRole: { $ref: '#/components/schemas/MasjidRole' }
+            plan: { type: [string, 'null'], enum: [STARTER, COMMUNITY, PLUS, null], description: Console subscription tier (manual invoicing at MVP) }
+    MasjidRoleAssignment:
+      type: object
+      required: [userId, displayName, role, grantedAt]
+      properties:
+        userId: { $ref: '#/components/schemas/Id' }
+        displayName: { type: string }
+        role: { $ref: '#/components/schemas/MasjidRole' }
+        grantedAt: { type: string, format: date-time }
+    MasjidStats:
+      type: object
+      required: [followers, followersDeltaSinceLastJumuah, donationsThisMonth, rotaFilled, rotaTotal]
+      properties:
+        followers: { type: integer }
+        followersDeltaSinceLastJumuah: { type: integer }
+        announcementOpenRate: { type: [number, 'null'], minimum: 0, maximum: 1, description: "Average over the last 4 announcements, when OneSignal reports it" }
+        donationsThisMonth:
+          type: array
+          description: Totals per currency
+          items:
+            type: object
+            required: [currency, amount, entries]
+            properties:
+              currency: { $ref: '#/components/schemas/CurrencyCode' }
+              amount: { $ref: '#/components/schemas/NonNegativeDecimal' }
+              entries: { type: integer }
+        rotaFilled: { type: integer, description: For the next Jumu'ah }
+        rotaTotal: { type: integer }
+    Follow:
+      type: object
+      required: [masjid, groupIds, followedAt]
+      properties:
+        masjid: { $ref: '#/components/schemas/MasjidSummary' }
+        groupIds:
+          type: array
+          items: { $ref: '#/components/schemas/Id' }
+        followedAt: { type: string, format: date-time }
+    AudienceGroupPublic:
+      type: object
+      required: [id, name]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string, examples: ['Sisters'] }
+    AudienceGroup:
+      allOf:
+        - $ref: '#/components/schemas/AudienceGroupPublic'
+        - type: object
+          required: [memberCount]
+          properties:
+            memberCount: { type: integer, minimum: 0 }
+    AudienceGroupInput:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 40 }
+    IqamahPrayer:
+      type: string
+      enum: [FAJR, DHUHR, ASR, MAGHRIB, ISHA, JUMUAH]
+    IqamahRule:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [FIXED, ADHAN_OFFSET, KHUTBAH] }
+        offsetMinutes: { type: integer, minimum: 0, maximum: 120, description: Required for ADHAN_OFFSET }
+        khutbahTime: { $ref: '#/components/schemas/LocalTime' }
+    IqamahTime:
+      type: object
+      required: [prayer, time]
+      properties:
+        prayer: { $ref: '#/components/schemas/IqamahPrayer' }
+        time: { $ref: '#/components/schemas/LocalTime' }
+    IqamahEntry:
+      type: object
+      additionalProperties: false
+      required: [date, prayer, iqamahTime, rule]
+      properties:
+        date: { type: string, format: date }
+        prayer: { $ref: '#/components/schemas/IqamahPrayer' }
+        iqamahTime: { $ref: '#/components/schemas/LocalTime' }
+        rule: { $ref: '#/components/schemas/IqamahRule' }
+    IqamahWeekInput:
+      type: object
+      additionalProperties: false
+      required: [weekStart, entries]
+      properties:
+        weekStart: { type: string, format: date }
+        entries:
+          type: array
+          maxItems: 42
+          items: { $ref: '#/components/schemas/IqamahEntry' }
+    IqamahWeek:
+      type: object
+      required: [masjidId, weekStart, timezone, state, version, entries]
+      properties:
+        masjidId: { $ref: '#/components/schemas/Id' }
+        weekStart: { type: string, format: date }
+        timezone: { type: string }
+        state: { type: string, enum: [DRAFT, PUBLISHED] }
+        version: { type: integer, minimum: 1 }
+        changedSincePublished: { type: integer, minimum: 0, description: Drafts only. Number of rows that differ from the published week }
+        publishedAt: { type: [string, 'null'], format: date-time }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/IqamahEntry' }
+    AnnouncementAudience:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [EVERYONE, GROUP] }
+        groupId: { $ref: '#/components/schemas/Id' }
+    AnnouncementInput:
+      type: object
+      additionalProperties: false
+      required: [title, body, audience]
+      properties:
+        title: { type: string, minLength: 3, maxLength: 80 }
+        body: { type: string, minLength: 1, maxLength: 500 }
+        audience: { $ref: '#/components/schemas/AnnouncementAudience' }
+        sendPush: { type: boolean, default: true }
+    Announcement:
+      type: object
+      required: [id, masjidId, title, body, audience, sentAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        masjidId: { $ref: '#/components/schemas/Id' }
+        title: { type: string }
+        body: { type: string }
+        audience:
+          allOf:
+            - $ref: '#/components/schemas/AnnouncementAudience'
+            - type: object
+              properties:
+                groupName: { type: [string, 'null'] }
+        sentAt: { type: string, format: date-time }
+        recipients: { type: [integer, 'null'], description: Admin view only }
+        opened: { type: [integer, 'null'], description: "Admin view only, when reported by OneSignal" }
+    Fund:
+      type: object
+      required: [id, name, currency, isZakatRingFenced, totalThisMonth]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string, examples: ['Roof and wudu area'] }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        goalAmount: { oneOf: [{ $ref: '#/components/schemas/NonNegativeDecimal' }, { type: 'null' }] }
+        isZakatRingFenced: { type: boolean }
+        totalThisMonth: { $ref: '#/components/schemas/NonNegativeDecimal' }
+        totalAllTime: { $ref: '#/components/schemas/NonNegativeDecimal' }
+    FundInput:
+      type: object
+      additionalProperties: false
+      required: [name, currency]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 60 }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        goalAmount: { $ref: '#/components/schemas/NonNegativeDecimal' }
+        isZakatRingFenced: { type: boolean, default: false }
+    FundPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 2, maxLength: 60 }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        goalAmount: { oneOf: [{ $ref: '#/components/schemas/NonNegativeDecimal' }, { type: 'null' }] }
+        isZakatRingFenced: { type: boolean }
+    FundEntryInput:
+      type: object
+      additionalProperties: false
+      required: [amount, receivedOn, method]
+      properties:
+        amount: { $ref: '#/components/schemas/NonNegativeDecimal' }
+        receivedOn: { type: string, format: date }
+        method: { type: string, enum: [CASH, BANK, OTHER] }
+        note: { type: string, maxLength: 200, description: Must not contain donor personal data }
+    FundEntry:
+      allOf:
+        - $ref: '#/components/schemas/FundEntryInput'
+        - type: object
+          required: [id, fundId, recordedAt]
+          properties:
+            id: { $ref: '#/components/schemas/Id' }
+            fundId: { $ref: '#/components/schemas/Id' }
+            recordedAt: { type: string, format: date-time }
+    RotaAssignee:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        userId: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
+    RotaShiftInput:
+      type: object
+      additionalProperties: false
+      required: [date, role, startTime, endTime, needed]
+      properties:
+        date: { type: string, format: date }
+        role: { type: string, minLength: 2, maxLength: 60, examples: ['Parking marshals'] }
+        startTime: { $ref: '#/components/schemas/LocalTime' }
+        endTime: { $ref: '#/components/schemas/LocalTime' }
+        needed: { type: integer, minimum: 1, maximum: 50 }
+        assignees:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/RotaAssignee' }
+    RotaShiftPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        date: { type: string, format: date }
+        role: { type: string, minLength: 2, maxLength: 60 }
+        startTime: { $ref: '#/components/schemas/LocalTime' }
+        endTime: { $ref: '#/components/schemas/LocalTime' }
+        needed: { type: integer, minimum: 1, maximum: 50 }
+        assignees:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/RotaAssignee' }
+    RotaShift:
+      allOf:
+        - $ref: '#/components/schemas/RotaShiftInput'
+        - type: object
+          required: [id, masjidId, status, assignees]
+          properties:
+            id: { $ref: '#/components/schemas/Id' }
+            masjidId: { $ref: '#/components/schemas/Id' }
+            status: { type: string, enum: [NEEDED, CONFIRMED], description: CONFIRMED when assignees count ≥ needed }
+
+    # ── diagnostics ──
+    DiagnosticReport:
+      type: object
+      additionalProperties: false
+      required: [appVersion, platform, osVersion, adhanHealth]
+      properties:
+        appVersion: { type: string, maxLength: 32 }
+        platform: { type: string, enum: [ANDROID, IOS, WEB] }
+        osVersion: { type: string, maxLength: 32 }
+        deviceModel: { type: string, maxLength: 64 }
+        locale: { $ref: '#/components/schemas/Locale' }
+        adhanHealth:
+          type: object
+          additionalProperties: false
+          properties:
+            notificationsAllowed: { type: boolean }
+            exactAlarms: { type: boolean }
+            batteryUnrestricted: { type: boolean }
+            alarmChannelSound: { type: boolean }
+            scheduleFresh: { type: boolean }
+        schedulerLog:
+          type: array
+          maxItems: 50
+          description: Lines with times and events only. No coordinates, city names or timezone names
+          items: { type: string, maxLength: 200 }
+        userMessage: { type: string, maxLength: 1000 }

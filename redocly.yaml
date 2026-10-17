@@ -1,0 +1,13 @@
+# Lint configuration for docs/openapi.yaml (make api-lint, .github/workflows/contract.yml)
+extends:
+  - recommended
+rules:
+  # A localhost server entry is deliberate (local development); the contract's production URL is first.
+  no-server-example.com: off
+  operation-4xx-response:
+    severity: error
+  operation-operationId-unique: error
+  no-unused-components: error
+  security-defined: error
+  # Health probes legitimately have no 4xx; they are excluded below.
+decorators: {}
