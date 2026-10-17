@@ -41,7 +41,7 @@ jobs:
         id: guard
         run: |
           if ls apps/mobile/test/fixtures/api/*.json >/dev/null 2>&1; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: steps.guard.outputs.present == 'true'
         with:
           python-version: '3.12'
