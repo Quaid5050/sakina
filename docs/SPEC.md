@@ -94,6 +94,7 @@ Format: **ID, story**, then acceptance criteria (AC) written so each can become 
 - AC4: The calculation method defaults from the country table (e.g. PK → Karachi with Hanafi Asr, GB → Moonsighting Committee). The three design options are shown first, with "More methods" listing all supported methods.
 - AC5: Exactly one method is selected (radio semantics, `aria-pressed` equivalent `Semantics(selected:)`).
 - AC6: Coordinates, method and madhab are persisted locally. Restarting the app skips onboarding.
+- AC7: The copy reads "Your location is used only on this phone to calculate times. It never leaves the device and is never sold or shared." The design's "…unless you turn on sync" is corrected, because sync never includes location (ADR-0007, DESIGN_TOKENS §9).
 
 **ONB-3.** As a new user, I choose my language, so the app and translation feel like home.
 - AC1: Options English, اردو, العربية. Bahasa shows "Indonesian · coming soon" and is disabled.
@@ -655,6 +656,7 @@ Pixel 7 (Android 14/15), Samsung Galaxy A-series (One UI 6), Xiaomi Redmi (Hyper
 | D-16 | Online donations are not processed in MVP; funds take manual entries | Needs a licensed payment partner; spec says zakat goes through licensed charities | Yes |
 | D-17 | Geohash precision 4 for masjid search, max 9 cells, enforced by the server | Coarse enough to be non-identifying, fine enough for useful results | Yes |
 | D-18 | Money and metal rates are decimals as JSON strings | Avoids float loss in zakat | Costly later |
+| D-20 | Onboarding copy corrected: location never leaves the device, even with sync | The design copy implied sync could send location, which contradicts ADR-0007 | Yes |
 | D-19 | FluentAssertions pinned to 7.x (Apache-2.0); v8+ needs a commercial licence. Fallback: AwesomeAssertions | Licence | Yes |
 
 ## 10. Open questions for the founder
