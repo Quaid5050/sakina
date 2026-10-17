@@ -23,7 +23,7 @@ docs/
   PLAN.md            Ordered TDD task breakdown, two parallel tracks
   DESIGN_TOKENS.md   Colours, type, spacing and radii extracted from the designs
   adr/               Architecture Decision Records
-.github/workflows/   CI: backend.yml, mobile.yml, contract.yml
+.github/workflows/   CI: backend.yml, mobile.yml, contract.yml, security.yml
 ```
 
 ## Quick start
