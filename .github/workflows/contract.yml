@@ -1,0 +1,71 @@
+name: contract
+
+# Lints the OpenAPI contract and validates mobile API fixtures against it (ADR-0011).
+on:
+  pull_request:
+    paths:
+      - 'docs/openapi.yaml'
+      - 'docs/API.md'
+      - 'redocly.yaml'
+      - '.redocly.lint-ignore.yaml'
+      - 'apps/mobile/test/fixtures/api/**'
+      - '.github/workflows/contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/openapi.yaml'
+      - 'apps/mobile/test/fixtures/api/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Redocly lint
+        run: npx --yes @redocly/cli@1.25.11 lint docs/openapi.yaml
+
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip until fixtures exist (PLAN M0.4)
+        id: guard
+        run: |
+          if ls apps/mobile/test/fixtures/api/*.json >/dev/null 2>&1; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-python@v5
+        if: steps.guard.outputs.present == 'true'
+        with:
+          python-version: '3.12'
+      - name: Validate fixtures against component schemas
+        if: steps.guard.outputs.present == 'true'
+        # Fixture naming convention: <SchemaName>.<case>.json, e.g. Family.with-children.json
+        run: |
+          pip install --quiet pyyaml==6.0.2 jsonschema==4.23.0 referencing==0.35.1
+          python3 - <<'PY'
+          import json, glob, os, sys, yaml
+          from jsonschema import Draft202012Validator
+          from referencing import Registry, Resource
+          from referencing.jsonschema import DRAFT202012
+          spec = yaml.safe_load(open('docs/openapi.yaml'))
+          registry = Registry().with_resource('urn:sakina:openapi', Resource.from_contents(spec, default_specification=DRAFT202012))
+          failed = False
+          for f in sorted(glob.glob('apps/mobile/test/fixtures/api/*.json')):
+              name = os.path.basename(f).split('.')[0]
+              if name not in spec['components']['schemas']:
+                  print(f"::error file={f}::unknown schema '{name}'"); failed = True; continue
+              schema = {'$ref': f'urn:sakina:openapi#/components/schemas/{name}'}
+              errs = list(Draft202012Validator(schema, registry=registry, format_checker=Draft202012Validator.FORMAT_CHECKER).iter_errors(json.load(open(f))))
+              for e in errs:
+                  print(f"::error file={f}::{'/'.join(map(str, e.absolute_path))}: {e.message}"); failed = True
+              if not errs: print(f"ok  {f}")
+          sys.exit(1 if failed else 0)
+          PY

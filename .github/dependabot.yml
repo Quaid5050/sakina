@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /apps/backend
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      microsoft:
+        patterns: ['Microsoft.*', 'System.*', 'Npgsql*']
+      testing:
+        patterns: ['xunit*', 'FluentAssertions', 'NSubstitute', 'Testcontainers*', 'WireMock*', 'coverlet*']
+    ignore:
+      # Licence: FluentAssertions 8+ is commercial (SPEC D-19).
+      - dependency-name: FluentAssertions
+        versions: ['>=8.0.0']
+      # Licence: MediatR 13+ is commercial; we don't use MediatR at all (ADR-0012).
+      - dependency-name: MediatR
+
+  - package-ecosystem: pub
+    directory: /apps/mobile
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }

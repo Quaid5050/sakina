@@ -1,0 +1,170 @@
+name: backend
+
+on:
+  pull_request:
+    paths:
+      - 'apps/backend/**'
+      - 'docs/openapi.yaml'
+      - '.github/workflows/backend.yml'
+      - 'Makefile'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/backend/**'
+      - 'docs/openapi.yaml'
+      - '.github/workflows/backend.yml'
+      - 'Makefile'
+  workflow_dispatch:
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+  SOLUTION: apps/backend/Sakina.sln
+
+jobs:
+  # Fast gate: format and analyzers. Runs in parallel with the test job.
+  lint:
+    name: format + analyzers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip until the solution exists (PLAN B0.1)
+        id: guard
+        run: |
+          if [ -f "$SOLUTION" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; echo "::notice::$SOLUTION not found yet, so skipping backend CI."; fi
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.guard.outputs.present == 'true'
+        with:
+          global-json-file: apps/backend/global.json
+          dotnet-version: '8.0.x'
+          cache: true
+          cache-dependency-path: apps/backend/**/packages.lock.json
+
+      - name: Restore
+        if: steps.guard.outputs.present == 'true'
+        run: dotnet restore "$SOLUTION" --locked-mode
+
+      - name: Format check (dotnet format --verify-no-changes)
+        if: steps.guard.outputs.present == 'true'
+        run: dotnet format "$SOLUTION" --verify-no-changes --no-restore --severity warn
+
+      - name: Vulnerable packages
+        if: steps.guard.outputs.present == 'true'
+        run: |
+          dotnet list "$SOLUTION" package --vulnerable --include-transitive 2>&1 | tee vuln.txt
+          if grep -qE '\b(High|Critical)\b' vuln.txt; then echo "::error::High/Critical vulnerable packages found"; exit 1; fi
+
+  test:
+    name: build + test (Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Testcontainers starts postgres:16-alpine itself (Docker is available on ubuntu-latest).
+    # The service container below is also available for tests or tools that prefer a fixed
+    # connection string (e.g. the migrations check); set SAKINA_TEST_USE_EXTERNAL_DB=true to use it.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: sakina_ci
+          POSTGRES_USER: sakina_ci
+          POSTGRES_PASSWORD: ${{ github.run_id }}-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sakina_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ASPNETCORE_ENVIRONMENT: Test
+      ConnectionStrings__Default: Host=localhost;Port=5432;Database=sakina_ci;Username=sakina_ci;Password=${{ github.run_id }}-ci-only
+      # Throwaway, per-run values. CI never holds production secrets.
+      Jwt__Issuer: https://ci.sakina.invalid
+      Jwt__Audience: sakina-ci
+      RevenueCat__WebhookSecret: ci-${{ github.run_id }}-webhook
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip until the solution exists (PLAN B0.1)
+        id: guard
+        run: |
+          if [ -f "$SOLUTION" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.guard.outputs.present == 'true'
+        with:
+          global-json-file: apps/backend/global.json
+          dotnet-version: '8.0.x'
+          cache: true
+          cache-dependency-path: apps/backend/**/packages.lock.json
+
+      - name: Generate per-run JWT signing key
+        if: steps.guard.outputs.present == 'true'
+        run: echo "Jwt__SigningKey=$(openssl rand -base64 48)" >> "$GITHUB_ENV"
+
+      - name: Restore
+        if: steps.guard.outputs.present == 'true'
+        run: dotnet restore "$SOLUTION" --locked-mode
+
+      - name: Restore local tools (dotnet-ef)
+        if: steps.guard.outputs.present == 'true'
+        working-directory: apps/backend
+        run: dotnet tool restore
+
+      - name: Build (warnings as errors)
+        if: steps.guard.outputs.present == 'true'
+        run: dotnet build "$SOLUTION" --no-restore -c Release
+
+      - name: Check for pending EF Core model changes
+        if: steps.guard.outputs.present == 'true'
+        working-directory: apps/backend
+        run: |
+          dotnet ef migrations has-pending-model-changes \
+            --project src/Sakina.Infrastructure --startup-project src/Sakina.Api \
+            --configuration Release --no-build
+
+      - name: Test with coverage
+        if: steps.guard.outputs.present == 'true'
+        run: |
+          dotnet test "$SOLUTION" --no-build -c Release \
+            --logger "trx;LogFilePrefix=results" \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./TestResults
+
+      - name: Coverage report + gate (Domain + Application ≥ 80% lines)
+        if: steps.guard.outputs.present == 'true'
+        working-directory: apps/backend
+        run: |
+          dotnet tool run reportgenerator \
+            -reports:"../../TestResults/**/coverage.cobertura.xml" \
+            -targetdir:"../../TestResults/coverage" \
+            -reporttypes:"MarkdownSummaryGithub;Cobertura" \
+            -assemblyfilters:"+Sakina.Domain;+Sakina.Application"
+          cat ../../TestResults/coverage/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET, sys
+          r = ET.parse('../../TestResults/coverage/Cobertura.xml').getroot()
+          rate = float(r.get('line-rate', 0)) * 100
+          print(f"Domain+Application line coverage: {rate:.1f}%")
+          sys.exit(0 if rate >= 80 else 1)
+          PY
+
+      - name: Upload test results
+        if: always() && steps.guard.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: TestResults/
+          retention-days: 14
