@@ -1,0 +1,65 @@
+{
+  "id": "01928c6e-7a3f-7c4e-9d2b-3f1a6b0e5c21",
+  "name": "The Rahman family",
+  "status": "ACTIVE",
+  "ownerMemberId": "01928c6e-7a40-7a11-8c01-000000000001",
+  "members": [
+    {
+      "id": "01928c6e-7a40-7a11-8c01-000000000001",
+      "kind": "ACCOUNT",
+      "role": "OWNER",
+      "displayName": "Fatima",
+      "color": "SAND",
+      "birthYear": null,
+      "shareWorship": true,
+      "hasLinkedDevice": false,
+      "isMe": true
+    },
+    {
+      "id": "01928c6e-7a40-7a11-8c01-000000000002",
+      "kind": "ACCOUNT",
+      "role": "GUARDIAN",
+      "displayName": "Ibrahim",
+      "color": "INK",
+      "birthYear": null,
+      "shareWorship": false,
+      "hasLinkedDevice": false,
+      "isMe": false
+    },
+    {
+      "id": "01928c6e-7a40-7a11-8c01-000000000003",
+      "kind": "CHILD",
+      "role": "CHILD",
+      "displayName": "Aisha",
+      "color": "TEAL",
+      "birthYear": 2015,
+      "shareWorship": true,
+      "hasLinkedDevice": true,
+      "isMe": false
+    },
+    {
+      "id": "01928c6e-7a40-7a11-8c01-000000000004",
+      "kind": "CHILD",
+      "role": "CHILD",
+      "displayName": "Yusuf",
+      "color": "ROSE",
+      "birthYear": 2017,
+      "shareWorship": true,
+      "hasLinkedDevice": false,
+      "isMe": false
+    },
+    {
+      "id": "01928c6e-7a40-7a11-8c01-000000000005",
+      "kind": "CHILD",
+      "role": "CHILD",
+      "displayName": "Maryam",
+      "color": "GOLD",
+      "birthYear": 2020,
+      "shareWorship": true,
+      "hasLinkedDevice": false,
+      "isMe": false
+    }
+  ],
+  "maxMembers": 6,
+  "createdAt": "2026-10-01T09:00:00Z"
+}

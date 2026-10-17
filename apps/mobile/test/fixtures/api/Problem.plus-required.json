@@ -1,0 +1,8 @@
+{
+  "type": "https://sakina.app/problems/plus-required",
+  "title": "Sakina Plus is required",
+  "status": 403,
+  "code": "PLUS_REQUIRED",
+  "instance": "/api/v1/families",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
+}

@@ -1,0 +1,11 @@
+{
+  "type": "https://sakina.app/problems/validation-failed",
+  "title": "One or more fields are invalid",
+  "status": 422,
+  "code": "VALIDATION_FAILED",
+  "errors": {
+    "displayName": [
+      "Display name must be 40 characters or fewer."
+    ]
+  }
+}

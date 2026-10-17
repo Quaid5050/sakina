@@ -1,0 +1,21 @@
+{
+  "id": "01928c6e-7a3f-7c4e-9d2b-3f1a6b0e5c21",
+  "name": "The Rahman family",
+  "status": "READ_ONLY",
+  "ownerMemberId": "01928c6e-7a40-7a11-8c01-000000000001",
+  "members": [
+    {
+      "id": "01928c6e-7a40-7a11-8c01-000000000001",
+      "kind": "ACCOUNT",
+      "role": "OWNER",
+      "displayName": "Fatima",
+      "color": "SAND",
+      "birthYear": null,
+      "shareWorship": true,
+      "hasLinkedDevice": false,
+      "isMe": true
+    }
+  ],
+  "maxMembers": 6,
+  "createdAt": "2026-10-01T09:00:00Z"
+}

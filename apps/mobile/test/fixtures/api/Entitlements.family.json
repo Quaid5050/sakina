@@ -1,0 +1,11 @@
+{
+  "plus": {
+    "active": true,
+    "source": "FAMILY",
+    "productId": null,
+    "expiresAt": "2027-10-01T09:00:00Z",
+    "willRenew": true,
+    "isTrial": false,
+    "familyId": "01928c6e-7a3f-7c4e-9d2b-3f1a6b0e5c21"
+  }
+}

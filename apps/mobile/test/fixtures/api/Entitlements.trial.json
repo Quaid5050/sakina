@@ -1,0 +1,11 @@
+{
+  "plus": {
+    "active": true,
+    "source": "PURCHASE",
+    "productId": "sakina_plus_family_yearly",
+    "expiresAt": "2026-10-24T09:00:00Z",
+    "willRenew": true,
+    "isTrial": true,
+    "familyId": null
+  }
+}

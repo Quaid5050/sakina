@@ -1,0 +1,8 @@
+{
+  "currency": "GBP",
+  "gold24kPerGram": "81.20",
+  "silverPerGram": "0.95",
+  "asOf": "2026-10-15T08:00:00Z",
+  "source": "FakeMetalRates",
+  "isStale": true
+}

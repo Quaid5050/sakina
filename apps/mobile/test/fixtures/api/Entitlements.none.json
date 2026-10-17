@@ -1,0 +1,11 @@
+{
+  "plus": {
+    "active": false,
+    "source": "NONE",
+    "productId": null,
+    "expiresAt": null,
+    "willRenew": null,
+    "isTrial": null,
+    "familyId": null
+  }
+}
