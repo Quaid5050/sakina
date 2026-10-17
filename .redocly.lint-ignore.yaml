@@ -1,0 +1,7 @@
+# Justified exceptions. Each entry must say why.
+docs/openapi.yaml:
+  operation-4xx-response:
+    # Health probes and a static public list have no client-error responses.
+    - '#/paths/~1health~1live/get/responses'
+    - '#/paths/~1health~1ready/get/responses'
+    - '#/paths/~1rates~1currencies/get/responses'
