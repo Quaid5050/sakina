@@ -1,0 +1,63 @@
+# ---------- OS / editors ----------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.iml
+
+# ---------- Secrets (never commit) ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+*.jks
+*.keystore
+key.properties
+appsettings.*.local.json
+secrets.json
+google-services.json
+GoogleService-Info.plist
+
+# ---------- .NET ----------
+[Bb]in/
+[Oo]bj/
+TestResults/
+coverage/
+*.user
+*.suo
+*.rsuser
+.vs/
+artifacts/
+*.nupkg
+BenchmarkDotNet.Artifacts/
+
+# ---------- Flutter / Dart ----------
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/lcov.info
+**/android/.gradle/
+**/android/local.properties
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Runner/GeneratedPluginRegistrant.*
+*.g.dart.tmp
+
+# ---------- Node (contract tooling only) ----------
+node_modules/
+
+# ---------- Logs ----------
+*.log
