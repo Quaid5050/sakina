@@ -1,4 +1,16 @@
 {
   "@@locale": "ur",
-  "appTitle": "سکینہ"
+  "appTitle": "سکینہ",
+  "navToday": "آج",
+  "navQuran": "قرآن",
+  "navFamily": "خاندان",
+  "navMore": "مزید",
+  "moreRamadan": "رمضان",
+  "moreZakat": "زکوٰۃ",
+  "moreTravel": "سفر",
+  "moreMasjids": "مساجد",
+  "morePlus": "سکینہ پلس",
+  "moreSettings": "ترتیبات",
+  "comingSoon": "جلد آ رہا ہے",
+  "familyJoinCode": "دعوتی کوڈ: {code}"
 }

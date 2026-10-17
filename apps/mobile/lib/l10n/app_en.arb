@@ -3,5 +3,26 @@
   "appTitle": "Sakina",
   "@appTitle": {
     "description": "The app name and brand wordmark."
+  },
+  "navToday": "Today",
+  "navQuran": "Quran",
+  "navFamily": "Family",
+  "navMore": "More",
+  "moreRamadan": "Ramadan",
+  "moreZakat": "Zakat",
+  "moreTravel": "Travel",
+  "moreMasjids": "Masjids",
+  "morePlus": "Sakina Plus",
+  "moreSettings": "Settings",
+  "comingSoon": "Coming soon",
+  "familyJoinCode": "Invite code: {code}",
+  "@familyJoinCode": {
+    "description": "Shown when the app opens from a family invite link.",
+    "placeholders": {
+      "code": {
+        "type": "String",
+        "example": "K7MQ2XRA"
+      }
+    }
   }
 }

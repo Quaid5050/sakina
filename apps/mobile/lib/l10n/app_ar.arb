@@ -1,4 +1,16 @@
 {
   "@@locale": "ar",
-  "appTitle": "سكينة"
+  "appTitle": "سكينة",
+  "navToday": "اليوم",
+  "navQuran": "القرآن",
+  "navFamily": "العائلة",
+  "navMore": "المزيد",
+  "moreRamadan": "رمضان",
+  "moreZakat": "الزكاة",
+  "moreTravel": "السفر",
+  "moreMasjids": "المساجد",
+  "morePlus": "سكينة بلس",
+  "moreSettings": "الإعدادات",
+  "comingSoon": "قريبًا",
+  "familyJoinCode": "رمز الدعوة: {code}"
 }
