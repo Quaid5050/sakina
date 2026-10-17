@@ -44,7 +44,7 @@ jobs:
         run: |
           if [ -f "$SOLUTION" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; echo "::notice::$SOLUTION not found yet, so skipping backend CI."; fi
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         if: steps.guard.outputs.present == 'true'
         with:
           global-json-file: apps/backend/global.json
@@ -102,7 +102,7 @@ jobs:
         run: |
           if [ -f "$SOLUTION" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         if: steps.guard.outputs.present == 'true'
         with:
           global-json-file: apps/backend/global.json
