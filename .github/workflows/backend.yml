@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Skip until the solution exists (PLAN B0.1)
         id: guard
@@ -95,7 +95,7 @@ jobs:
       Jwt__Audience: sakina-ci
       RevenueCat__WebhookSecret: ci-${{ github.run_id }}-webhook
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Skip until the solution exists (PLAN B0.1)
         id: guard
