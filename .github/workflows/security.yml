@@ -1,0 +1,40 @@
+name: security
+
+# Repo-wide checks that run on every PR regardless of paths.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The gitleaks CLI image is used instead of gitleaks-action, which needs a paid licence for org repos.
+      - name: gitleaks detect
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.21.2 detect --source /repo --redact --verbose --exit-code 1
+
+  pledge-guard:
+    name: Amanah pledge guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No tracking/ad SDKs or location parameters anywhere in source
+        run: |
+          set -e
+          # 1. Known tracking/ads SDK identifiers in any manifest or source file
+          if git grep -nIE 'firebase_analytics|FirebaseAnalytics|Crashlytics|google_mobile_ads|com\.google\.android\.gms\.ads|AppsFlyer|com\.adjust\.sdk|io\.branch|Mixpanel|Amplitude' -- apps ':!**/*.md'; then
+            echo "::error::Tracking/ads SDK reference found (Amanah pledge, CONTRIBUTING §6)"; exit 1; fi
+          # 2. The contract must not accept user coordinates as query parameters
+          if grep -nE "name: (lat|lng|latitude|longitude|lon)$" docs/openapi.yaml; then
+            echo "::error::openapi.yaml exposes a coordinate parameter (ADR-0007)"; exit 1; fi
+          echo "pledge guard passed"

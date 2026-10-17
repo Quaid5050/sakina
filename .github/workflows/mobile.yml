@@ -1,0 +1,124 @@
+name: mobile
+
+on:
+  pull_request:
+    paths:
+      - 'apps/mobile/**'
+      - 'docs/openapi.yaml'
+      - '.github/workflows/mobile.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/mobile/**'
+      - 'docs/openapi.yaml'
+      - '.github/workflows/mobile.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/mobile
+
+jobs:
+  analyze-test:
+    name: format + analyze + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip until the Flutter project exists (PLAN M0.1)
+        id: guard
+        working-directory: .
+        run: |
+          if [ -f apps/mobile/pubspec.yaml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; echo "::notice::apps/mobile/pubspec.yaml not found yet, so skipping mobile CI."; fi
+
+      - uses: subosito/flutter-action@v2
+        if: steps.guard.outputs.present == 'true'
+        with:
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        if: steps.guard.outputs.present == 'true'
+        run: flutter pub get
+
+      - name: Privacy deny-list (no ads/analytics/tracking SDKs)
+        if: steps.guard.outputs.present == 'true'
+        run: |
+          DENY='firebase_analytics|firebase_crashlytics|google_mobile_ads|facebook_|flutter_facebook|appsflyer|adjust_sdk|branch_sdk|sentry_flutter|mixpanel|amplitude|segment_analytics|advertising_id|app_tracking_transparency'
+          if grep -E "^  ($DENY)" pubspec.lock; then echo "::error::Denied package in pubspec.lock (see CONTRIBUTING §6)"; exit 1; fi
+
+      - name: Code generation (drift, riverpod, freezed)
+        if: steps.guard.outputs.present == 'true' && hashFiles('apps/mobile/build.yaml') != ''
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Localisations
+        if: steps.guard.outputs.present == 'true'
+        run: flutter gen-l10n
+
+      - name: dart format
+        if: steps.guard.outputs.present == 'true'
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: flutter analyze
+        if: steps.guard.outputs.present == 'true'
+        run: flutter analyze --fatal-infos
+
+      - name: flutter test (with coverage)
+        if: steps.guard.outputs.present == 'true'
+        run: flutter test --coverage --reporter expanded
+
+      - name: Coverage gate (domain + core ≥ 80% lines)
+        if: steps.guard.outputs.present == 'true'
+        run: |
+          python3 - <<'PY'
+          import re, sys
+          hit = found = 0
+          keep = False
+          for line in open('coverage/lcov.info'):
+              if line.startswith('SF:'):
+                  path = line[3:].strip()
+                  keep = bool(re.search(r'lib/(core/|features/[^/]+/domain/)', path)) and not path.endswith(('.g.dart', '.freezed.dart'))
+              elif keep and line.startswith('LH:'): hit += int(line[3:])
+              elif keep and line.startswith('LF:'): found += int(line[3:])
+          rate = 100.0 * hit / found if found else 100.0
+          print(f"domain+core line coverage: {rate:.1f}% ({hit}/{found})")
+          sys.exit(0 if rate >= 80 else 1)
+          PY
+
+      - name: Upload coverage
+        if: always() && steps.guard.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-coverage
+          path: apps/mobile/coverage/lcov.info
+          retention-days: 14
+
+  build-web-console:
+    name: build console (web)
+    needs: analyze-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip until the console entrypoint exists (PLAN M12.1)
+        id: guard
+        working-directory: .
+        run: |
+          if [ -f apps/mobile/lib/main_console.dart ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: subosito/flutter-action@v2
+        if: steps.guard.outputs.present == 'true'
+        with:
+          channel: stable
+          cache: true
+      - if: steps.guard.outputs.present == 'true'
+        run: |
+          flutter pub get
+          flutter build web --release -t lib/main_console.dart --no-web-resources-cdn

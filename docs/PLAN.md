@@ -65,7 +65,7 @@ flowchart LR
 ### B0: Foundation (C0)
 
 **B0.1 Solution skeleton** (M)
-- Create `Sakina.sln`, `global.json` (SDK `8.0.4xx`, `rollForward: latestFeature`), `Directory.Build.props` (Nullable, `TreatWarningsAsErrors`, `AnalysisLevel=latest-recommended`, `InvariantGlobalization=false`), `Directory.Packages.props` (central versions), and the four `src` and two `tests` projects with the references in ARCHITECTURE §4.1. Add `.config/dotnet-tools.json` with `dotnet-ef`.
+- Create `Sakina.sln`, `global.json` (SDK `8.0.4xx`, `rollForward: latestFeature`), `Directory.Build.props` (Nullable, `TreatWarningsAsErrors`, `AnalysisLevel=latest-recommended`, `InvariantGlobalization=false`), `Directory.Packages.props` (central versions), and the four `src` and two `tests` projects with the references in ARCHITECTURE §4.1. Add `.config/dotnet-tools.json` with `dotnet-ef` and `dotnet-reportgenerator-globaltool` (`reportgenerator`), and enable `RestorePackagesWithLockFile` (the CI restores with `--locked-mode` and caches on `packages.lock.json`). Test projects reference `coverlet.collector`.
 - Tests first: `ArchitectureTests` (NetArchTest.Rules). Domain references nothing; Application doesn't reference Infrastructure or Api; Api controllers don't reference `DbContext`.
 - AC: `make backend-build backend-lint backend-test` passes locally and in CI.
 
