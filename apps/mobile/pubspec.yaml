@@ -1,0 +1,61 @@
+name: sakina_mobile
+description: Sakina, a privacy-first Muslim companion app (mobile + masjid console).
+publish_to: 'none'
+version: 0.1.0+1
+
+# Toolchain is pinned in .github/workflows/mobile.yml (Flutter 3.44.9, Dart 3.12).
+# See apps/mobile/README.md "Toolchain and dependency pins" for why 3.44 and
+# not 3.47 (package:flutter/material.dart is deprecated in 3.47).
+environment:
+  sdk: ^3.10.0
+  flutter: '>=3.44.0'
+
+# Every package below passed the no-phone-home review (CONTRIBUTING §6).
+# Versions are exact pins; Dependabot proposes upgrades weekly.
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  # Prayer times (MIT). Pure Dart, no network. Wrapped by PrayerTimeCalculator.
+  adhan: 2.0.0+1
+  # Exact decimal arithmetic for zakat and metal rates (Apache-2.0).
+  decimal: 3.2.6
+  flutter_riverpod: 3.4.3
+  go_router: 17.5.0
+  # Pinned to the version flutter_localizations 3.44 pins.
+  intl: 0.20.2
+  shared_preferences: 2.5.4
+  # IANA tz database bundled in Dart code; used to show a city's local times.
+  timezone: 0.10.1
+  url_launcher: 6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 6.0.0
+
+flutter:
+  uses-material-design: true
+  generate: true
+
+  # All fonts are bundled (SIL OFL, licences in assets/fonts/OFL-*.txt) and
+  # never fetched at runtime (SPEC P11).
+  fonts:
+    - family: Fraunces
+      fonts:
+        - asset: assets/fonts/Fraunces-Variable.ttf
+    - family: Manrope
+      fonts:
+        - asset: assets/fonts/Manrope-Variable.ttf
+    - family: Amiri
+      fonts:
+        - asset: assets/fonts/Amiri-Regular.ttf
+        - asset: assets/fonts/Amiri-Bold.ttf
+          weight: 700
+    - family: NotoNaskhArabic
+      fonts:
+        - asset: assets/fonts/NotoNaskhArabic-Variable.ttf
+    - family: NotoNastaliqUrdu
+      fonts:
+        - asset: assets/fonts/NotoNastaliqUrdu-Variable.ttf

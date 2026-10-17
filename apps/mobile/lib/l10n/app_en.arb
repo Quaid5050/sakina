@@ -1,0 +1,7 @@
+{
+  "@@locale": "en",
+  "appTitle": "Sakina",
+  "@appTitle": {
+    "description": "The app name and brand wordmark."
+  }
+}

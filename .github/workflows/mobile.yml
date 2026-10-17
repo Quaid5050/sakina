@@ -42,7 +42,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         if: steps.guard.outputs.present == 'true'
         with:
+          # Pinned: see apps/mobile/README.md "Toolchain and dependency pins".
           channel: stable
+          flutter-version: 3.44.9
           cache: true
 
       - name: flutter pub get
@@ -62,10 +64,6 @@ jobs:
       - name: Localisations
         if: steps.guard.outputs.present == 'true'
         run: flutter gen-l10n
-
-      - name: dart format
-        if: steps.guard.outputs.present == 'true'
-        run: dart format --output=none --set-exit-if-changed .
 
       - name: flutter analyze
         if: steps.guard.outputs.present == 'true'
@@ -93,6 +91,12 @@ jobs:
           sys.exit(0 if rate >= 80 else 1)
           PY
 
+      # Formatting runs after analyze and test so a pure formatting diff never
+      # hides real analyzer or test results. It still fails the job.
+      - name: dart format
+        if: steps.guard.outputs.present == 'true'
+        run: dart format --output=none --set-exit-if-changed .
+
       - name: Upload coverage
         if: always() && steps.guard.outputs.present == 'true'
         uses: actions/upload-artifact@v4
@@ -117,6 +121,7 @@ jobs:
         if: steps.guard.outputs.present == 'true'
         with:
           channel: stable
+          flutter-version: 3.44.9
           cache: true
       - if: steps.guard.outputs.present == 'true'
         run: |
