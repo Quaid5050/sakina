@@ -69,7 +69,3 @@ make backend-run
 4. `docs/openapi.yaml` + `docs/API.md` — the contract between mobile and backend.
 5. `docs/PLAN.md` — which task to pick up next.
 6. `CONTRIBUTING.md` — TDD workflow, branches and commits.
-
-## Status
-
-Architecture and contract phase. No application code yet. Launch target: Ramadan 1448 (expected around 8 February 2027, subject to moonsighting).
